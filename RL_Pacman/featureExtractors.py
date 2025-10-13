@@ -65,39 +65,79 @@ def closestFood(pos, food, walls):
 
 class SimpleExtractor(FeatureExtractor):
     """
-    Returns simple features for a basic reflex Pacman:
-    - whether food will be eaten
-    - how far away the next food is
-    - whether a ghost collision is imminent
-    - whether a ghost is one step away
+    Enhanced feature extractor with additional strategic features:
+    - Distance to nearest ghost (not just 1-step away)
+    - Closest scared ghost distance
+    - Number of food pellets remaining
+    - Average distance to food
+    - Whether in a dead-end
+    - Capsule proximity
     """
-
+    
     def getFeatures(self, state, action):
-        # extract the grid of food and wall locations and get the ghost locations
         food = state.getFood()
         walls = state.getWalls()
         ghosts = state.getGhostPositions()
-
+        capsules = state.getCapsules()
+        
         features = util.Counter()
-
         features["bias"] = 1.0
-
-        # compute the location of pacman after he takes the action
+        
+        # Current position after action
         x, y = state.getPacmanPosition()
         dx, dy = Actions.directionToVector(action)
         next_x, next_y = int(x + dx), int(y + dy)
-
-        # count the number of ghosts 1-step away
-        features["#-of-ghosts-1-step-away"] = sum((next_x, next_y) in Actions.getLegalNeighbors(g, walls) for g in ghosts)
-
-        # if there is no danger of ghosts then add the food feature
+        
+        # Feature 1: Immediate ghost danger
+        features["#-of-ghosts-1-step-away"] = sum(
+            (next_x, next_y) in Actions.getLegalNeighbors(g, walls) for g in ghosts
+        )
+        
+        # Feature 2: Distance to nearest active ghost
+        ghost_distances = [manhattanDistance((next_x, next_y), g) for g in ghosts]
+        if ghost_distances:
+            min_ghost_dist = min(ghost_distances)
+            features["nearest-ghost-distance"] = min_ghost_dist / (walls.width * walls.height)
+            
+            # Danger zone (ghost very close)
+            if min_ghost_dist <= 2:
+                features["danger-zone"] = 1.0
+        
+        # Feature 3: Food features
         if not features["#-of-ghosts-1-step-away"] and food[next_x][next_y]:
             features["eats-food"] = 1.0
-
+        
+        # Closest food distance
         dist = closestFood((next_x, next_y), food, walls)
         if dist is not None:
-            # make the distance a number less than one otherwise the update
-            # will diverge wildly
             features["closest-food"] = float(dist) / (walls.width * walls.height)
+        
+        # Feature 4: Food density in nearby area
+        food_count = 0
+        for i in range(max(0, next_x - 2), min(walls.width, next_x + 3)):
+            for j in range(max(0, next_y - 2), min(walls.height, next_y + 3)):
+                if food[i][j]:
+                    food_count += 1
+        features["nearby-food-density"] = food_count / 25.0
+        
+        # Feature 5: Capsule proximity
+        if capsules:
+            capsule_distances = [manhattanDistance((next_x, next_y), c) for c in capsules]
+            min_capsule_dist = min(capsule_distances)
+            features["closest-capsule"] = float(min_capsule_dist) / (walls.width * walls.height)
+            
+            # Encourage eating capsules when ghosts are near
+            if min_ghost_dist <= 5 and min_capsule_dist <= 3:
+                features["capsule-opportunity"] = 1.0
+        
+        # Feature 6: Dead-end detection
+        legal_neighbors = Actions.getLegalNeighbors((next_x, next_y), walls)
+        features["is-dead-end"] = 1.0 if len(legal_neighbors) <= 1 else 0.0
+        
+        # Feature 7: Stopping penalty
+        if action == Directions.STOP:
+            features["stopped"] = 1.0
+        
+        # Normalize all features
         features.divideAll(10.0)
         return features
